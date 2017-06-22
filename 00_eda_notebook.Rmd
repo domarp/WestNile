@@ -1,0 +1,152 @@
+---
+output:
+  html_document: default
+  html_notebook: default
+  pdf_document: default
+---
+
+Notebook for data exploration : West Nile Virus prediction Challenge
+
+```{r message = FALSE}
+## Author : Pramod Balakrishnan
+
+rm(list = ls())
+# Set directory
+setwd("C:\\Users\\prbalakrishnan\\Desktop\\New folder\\")
+
+library(ggplot2)
+library(lubridate)
+library(caTools)
+source("eda_utilities.r")
+
+```
+
+```{r}
+# Read train data
+train.data = read.csv("train.csv")
+df <- statsNum(train.data)
+df
+df <- statsNonNum(train.data)
+df
+```
+```{r}
+# Read test data
+test.data = read.csv("test.csv")
+df <- statsNum(test.data)
+df
+df <- statsNonNum(test.data)
+df
+```
+
+```{r}
+# Append train & test
+train.data$Id <- -999
+test.data$WnvPresent <- NA
+test.data$NumMosquitos <- -999
+test.data <- test.data[,names(train.data)]
+tags.train.data <- rbind(data.frame(train.data), data.frame(test.data))
+
+df <- statsNum(tags.train.data)
+df
+df <- statsNonNum(tags.train.data)
+df
+```
+
+```{r}
+# Read weather data
+weather.data = read.csv("weather.csv")
+df <- statsNum(weather.data)
+df
+df <- statsNonNum(weather.data)
+df
+```
+```{r}
+# WnvPresent over years
+train.data$Year = factor(year(train.data$Date))
+plt <- ggplot(train.data, aes(Year)) + geom_bar(aes(weight = sum(WnvPresent)))
+plt
+```
+High occurence in 2007 followed by dip but up again in 2013
+
+![Year on Year Spread of virus occurences](yr-on-yr.png)
+```{r}
+# Species Variable Analysis
+plotNonNumFreq(train.data,c("Species"))
+```
+Three Species values dominate : CULEX RESTUANS, CULEX PIPENS, CULES RESTUANS/CULEX PIPENS
+```{r}
+plotNonNumFreq(test.data,c("Species"))
+```
+Test data is a combination of all Species, locations and traps so this is expected
+```{r}
+plt <- ggplot(train.data, aes(x=Species,y=WnvPresent)) + stat_summary(fun.y = "sum", geom = "bar") + 
+  coord_flip()#+ geom_bar(aes(weight = sum(WnvPresent)))
+plt
+```
+Only three values of Species in the training data exhibit presence of WNV
+```{r}
+tags.train.data$Species.1 <- as.character(tags.train.data$Species)
+valid.Species <- c("CULEX PIPIENS","CULEX PIPIENS/RESTUANS","CULEX RESTUANS")
+tags.train.data$Species.1[which(!(tags.train.data$Species.1 %in% valid.Species))] = "MISC"
+tags.train.data$Species <- factor(tags.train.data$Species.1)
+tags.train.data$Species.1 <- NULL
+
+plt.all <- ggplot(tags.train.data, aes(Species)) + geom_bar() + facet_grid(.~year(Date)) + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+plt.sel <- ggplot(tags.train.data[which(tags.train.data$Species != 'MISC'),], aes(Species)) + geom_bar() + facet_grid(.~year(Date)) + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+plt.all
+plt.sel
+```
+Notice training periods: Though initially a trend cannot be observed, it displays a pattern over the last three years
+```{r}
+# Species vs NumMosquitos
+plt <- ggplot(train.data, aes(x=Species,y=NumMosquitos)) + stat_summary(fun.y = "sum", geom = "bar") + 
+  coord_flip()#+ geom_bar(aes(weight = sum(WnvPresent)))
+plt
+
+```
+```{r}
+train.data.1 = train.data
+train.data.1$WnvPresent <- factor(train.data.1$WnvPresent,levels = c("0","1"))
+plotNumHist(train.data.1,c("NumMosquitos"))
+colAUC(as.matrix(train.data.1$NumMosquitos),train.data.1$WnvPresent,alg="ROC")
+```
+Spike at 50 due to the way the data is arranged; NumMosquitos are capped at 50 and split into multiple rows if the value exceeds 50. Using the data as is (in the row split format) might yield lesser predictive power
+```{r}
+train.data = train.data %>% group_by(Date, Trap, Latitude, Longitude, Species) %>% 
+  summarize(Address = last(Address), Block = last(Block), Street = last(Street), 
+            AddressNumberAndStreet = last(AddressNumberAndStreet), 
+            AddressAccuracy = mean(AddressAccuracy), NumMosquitos = sum(NumMosquitos), 
+            WnvPresent = max(WnvPresent))
+train.data.1 = train.data
+train.data.1$WnvPresent <- factor(train.data.1$WnvPresent,levels = c("0","1"))
+plotNumHist(train.data.1,c("NumMosquitos"))
+colAUC(as.matrix(train.data.1$NumMosquitos),train.data.1$WnvPresent,alg="ROC")
+```
+Clubbing duplicate rows at (Date, Trap, Latitude, Longitude, Species) improves predictive power of this variable
+```{r}
+bivariate(train.data.1, c("NumMosquitos","WnvPresent"),1)
+```
+
+```{r}
+freq = table(train.data.1$Trap)
+freq = sort(freq, decreasing = TRUE)
+sel.values = names(freq)[1:5]
+train.data.2 = train.data.1[which(train.data.1$Trap %in% sel.values),]
+plt <- ggplot(train.data.2, aes(x=Trap,y=NumMosquitos)) + stat_summary(fun.y = "mean",geom="bar") + coord_flip() + facet_grid(.~year(Date))
+plt
+```
+Trend over years : Trap vs NumMosquitos
+```{r}
+plt <- ggplot(train.data.1, aes(x=Species,y=NumMosquitos)) + stat_summary(fun.y = "mean",geom="bar") + coord_flip() + facet_grid(.~year(Date))
+plt
+```
+Trend over years : Species vs NumMosquitos
+```{r}
+plt <- ggplot(train.data.2, aes(x=month(Date),y=NumMosquitos)) + stat_summary(fun.y = "mean",geom="bar") + coord_flip() + facet_grid(.~year(Date))
+plt
+```
+Trend over years : Month of the year vs NumMosquitos
